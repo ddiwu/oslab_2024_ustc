@@ -15,7 +15,7 @@
 #define READ_END 0      // pipe read end
 
 /* 
- * 需要大家完成的代码已经用注释`TODO:`标记
+ * 需要大家完成的代码已经用注释`DO:`标记
  * 可以编辑器搜索找到
  * 使用支持TODO高亮编辑器（如vscode装TODO highlight插件）的同学可以轻松找到要添加内容的地方。
  */
@@ -104,7 +104,7 @@ int process_redirect(int argc, char** argv, int *fd) {
         int tfd;
         if(strcmp(argv[i], ">") == 0) {
             //DO: 打开输出文件从头写入
-            tfd = open(argv[i+1], O_CREAT | O_WRONLY | O_TRUNC);//没有创建，有只写，有内容清空
+            tfd = open(argv[i+1], O_CREAT | O_WRONLY | O_TRUNC, 775);//没有创建，有只写，有内容清空
             if(tfd < 0) {
                 printf("open '%s' error: %s\n", argv[i+1], strerror(errno));
             } else {
@@ -114,7 +114,7 @@ int process_redirect(int argc, char** argv, int *fd) {
             i += 2;
         } else if(strcmp(argv[i], ">>") == 0) {
             //DO: 打开输出文件追加写入
-            tfd = open(argv[i+1], O_CREAT | O_WRONLY | O_ACCMODE);
+            tfd = open(argv[i+1], O_CREAT | O_WRONLY | O_ACCMODE, 775);
             if(tfd < 0) {
                 printf("open '%s' error: %s\n", argv[i+1], strerror(errno));
             } else {
@@ -176,23 +176,30 @@ int main() {
     char cmdline[MAX_CMDLINE_LENGTH];
 
     char *commands[128];
+    char *many_commands[128];
+    
     char path[256];
 
+    int many_cmd_count;
     int cmd_count;
+    int i;
     while (1) {
         /* DO: 增加打印当前目录，格式类似"shell:/home/oslab ->"，你需要改下面的printf */
         getcwd(path, 256);//256为path空间BYTE数
-        printf("⚛️ shell: %s -> ",path);
+        printf("shell: %s ->",path);
         fflush(stdout);
 
         fgets(cmdline, 256, stdin);
         strtok(cmdline, "\n");
 
-        /* TODO: 基于";"的多命令执行，请自行选择位置添加 */
+        /*  基于";"的多命令执行，请自行选择位置添加 */
+        many_cmd_count = split_string(cmdline, ";", many_commands); 
         
-        /* 由管道操作符'|'分割的命令行各个部分，每个部分是一条命令 */
+        /* 由管道操作符'|'分割的命令行各个部分，每个部分是一条命令 -> 多条命令*/
         /* 拆解命令行 */
-        cmd_count = split_string(cmdline, "|", commands);
+        for(i = 0; i < many_cmd_count; i++) 
+        {    
+        cmd_count = split_string(many_commands[i], "|", commands);
 
         if(cmd_count == 0) {
             continue;
@@ -200,23 +207,23 @@ int main() {
             char *argv[MAX_CMD_ARG_NUM];
             int argc;
             int fd[2];
-            /* TODO:处理参数，分出命令名和参数
-             *
-             *
-             * 
-             */
+            // 处理参数，分出命令名和参数
+            argc = split_string(commands[0], " ", argv);
             /* 在没有管道时，内建命令直接在主进程中完成，外部命令通过创建子进程完成 */
             if(exec_builtin(argc, argv, fd) == 0) {
                 continue;
             }
-            /* TODO:创建子进程，运行命令，等待命令运行结束
-             *
-             *
-             *
-             *
-             */
-
-        } else if(cmd_count == 2) {     // 两个命令间的管道
+            // 创建子进程，运行命令，等待命令运行结束
+            else {
+                int pid = fork();
+                if(pid == 0)//子进程才执行
+                {
+                    execute(argc,argv);
+                }
+            }
+            wait(NULL);
+        } 
+        else if(cmd_count == 2) {     // 两个命令间的管道
             int pipefd[2];
             int ret = pipe(pipefd);
             if(ret < 0) {
@@ -226,10 +233,10 @@ int main() {
             // 子进程1
             int pid = fork();
             if(pid == 0) {  
-                /*TODO:子进程1 将标准输出重定向到管道，注意这里数组的下标被挖空了要补全*/
-                close(pipefd[]);
-                dup2(pipefd[], STDOUT_FILENO);
-                close(pipefd[]);
+                /*子进程1 将标准输出重定向到管道，注意这里数组的下标被挖空了要补全*/
+                close(pipefd[READ_END]);
+                dup2(pipefd[WRITE_END], STDOUT_FILENO);
+                close(pipefd[WRITE_END]);
                 /* 
                     在使用管道时，为了可以并发运行，所以内建命令也在子进程中运行
                     因此我们用了一个封装好的execute函数
@@ -246,65 +253,90 @@ int main() {
             // 子进程2
             pid = fork();
             if(pid == 0) {  
-                /* TODO:子进程2 将标准输入重定向到管道，注意这里数组的下标被挖空了要补全 */
-                close(pipefd[]);
-                dup2(pipefd[], STDIN_FILENO);
-                close(pipefd[]);
+                /* 子进程2 将标准输入重定向到管道，注意这里数组的下标被挖空了要补全 */
+                close(pipefd[WRITE_END]);
+                dup2(pipefd[READ_END], STDIN_FILENO);
+                close(pipefd[READ_END]);
 
                 char *argv[MAX_CMD_ARG_NUM];
-                /* TODO:处理参数，分出命令名和参数，并使用execute运行
+                /* 处理参数，分出命令名和参数，并使用execute运行
                  * 在使用管道时，为了可以并发运行，所以内建命令也在子进程中运行
                  * 因此我们用了一个封装好的execute函数
-                 *
-                 * 
                  */
+                int argc = split_string(commands[1], " ", argv);
+                execute(argc, argv);
+                exit(255);
             }
             close(pipefd[WRITE_END]);
             close(pipefd[READ_END]);
             
             
             while (wait(NULL) > 0);
-        } else {    // 选做：三个以上的命令
+        } 
+        else {    // 选做：三个以上的命令
             int read_fd;    // 上一个管道的读端口（出口）
             for(int i=0; i<cmd_count; i++) {
                 int pipefd[2];
-                /* TODO:创建管道，n条命令只需要n-1个管道，所以有一次循环中是不用创建管道的
-                 *
-                 *
-                 * 
-                 */
+                // 创建管道，n条命令只需要n-1个管道，所以有一次循环中是不用创建管道的
+                if(i != cmd_count -1)
+                {
+                    int ret = pipe(pipefd);
+                    if(ret < 0) {
+                    printf("pipe error!\n");
+                    continue;
+                    }
+                }
+
                 int pid = fork();
                 if(pid == 0) {
-                    /* TODO:除了最后一条命令外，都将标准输出重定向到当前管道入口
-                     *
-                     *
-                     * 
-                     */
+                    // 除了最后一条命令外，都将标准输出重定向到当前管道入口
+                    if(i != cmd_count - 1)
+                    {
+                        close(pipefd[READ_END]);
+                        dup2(pipefd[WRITE_END], STDOUT_FILENO);
+                        close(pipefd[WRITE_END]);
+                    }
 
-                    /* TODO:除了第一条命令外，都将标准输入重定向到上一个管道出口
-                     *
-                     *
-                     * 
-                     */
+                    // DO:除了第一条命令外，都将标准输入重定向到上一个管道出口
+                    if(i != 0) {
+                        dup2(read_fd, STDIN_FILENO);
+                        close(read_fd);
+                    }
 
-                    /* TODO:处理参数，分出命令名和参数，并使用execute运行
+                    /* DO:处理参数，分出命令名和参数，并使用execute运行
                      * 在使用管道时，为了可以并发运行，所以内建命令也在子进程中运行
                      * 因此我们用了一个封装好的execute函数
-                     * 
-                     * 
                      */
+
+                    char *argv[MAX_CMD_ARG_NUM];
+                    int argc = split_string(commands[i], " ", argv);
+                    execute(argc, argv);
+                    exit(255);
                 }
                 /* 父进程除了第一条命令，都需要关闭当前命令用完的上一个管道读端口 
                  * 父进程除了最后一条命令，都需要保存当前命令的管道读端口 
                  * 记得关闭父进程没用的管道写端口
-                 * 
                  */
+                if(i != 0) {
+                    close(read_fd);
+                }
+
+                if(i != cmd_count - 1) {//父进程进行连接的操作
+                    read_fd = pipefd[READ_END];
+                }
+
+                close(pipefd[WRITE_END]);
+
+                // if(i == cmd_count - 1) {
+                //     close(pipefd[READ_END]);
+                // }
+
                 // 因为在shell的设计中，管道是并发执行的，所以我们不在每个子进程结束后才运行下一个
                 // 而是直接创建下一个子进程
             }
-            // TODO:等待所有子进程结束
-
+            // 等待所有子进程结束
+            while (wait(NULL) > 0);
         }
-
+        }
     }
 }
