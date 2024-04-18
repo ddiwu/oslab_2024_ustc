@@ -77,6 +77,14 @@ int exec_builtin(int argc, char**argv, int *fd) {
         exit(0);
         return 0;
        
+    } else if (strcmp(argv[0], "kill") == 0 && argc == 2){
+        kill(atoi(argv[1]), SIGTERM);
+        return 0;
+
+    } else if (strcmp(argv[0], "kill") == 0){
+        kill(atoi(argv[1]), atoi(argv[2]));
+        return 0;
+
     } else {
         // 不是内置指令时
         return -1;
