@@ -1,0 +1,18 @@
+{
+    // https://code.visualstudio.com/docs/editor/tasks
+    "version": "2.0.0",
+    "tasks": [
+        {
+            "label": "Build",  // 任务的名字叫Build，注意是大小写区分的，会在launch中调用这个名字
+            "type": "shell",  // 任务执行的是shell命令，也可以是cppbuild等
+            "command": "sh", // 命令是sh
+            "args": [
+                "'${fileDirname}/run.sh'",
+                "'0'",         //便于gdb调试
+            ],
+            "options": {
+                "cwd": "${fileDirname}"
+            }
+        }
+    ]
+}

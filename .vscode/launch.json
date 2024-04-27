@@ -1,0 +1,27 @@
+{
+    // 使用 IntelliSense 了解相关属性。 
+    // 悬停以查看现有属性的描述。
+    // 欲了解更多信息，请访问: https://go.microsoft.com/fwlink/?linkid=830387
+    "version": "0.2.0",
+    "configurations": [
+        {
+            "name": "Debug", //出现在调试启动配置下拉列表中的易于阅读的名称。
+            "type": "cppdbg", // 用于此启动配置的调试器类型。 每个安装的调试扩展都会引入一个类型：(node) 用于内置节点调试器，例如，或者 php 和 go 用于 PHP 和 Go 扩展。
+            "request": "launch", //此启动配置的请求类型。 目前，支持 (launch) 和 (attach)。
+            "program": "${fileDirname}/${fileBasenameNoExtension}", //要运行的可执行文件或源代码的路径
+            "preLaunchTask": "" ,  //定义在调试之前要运行的任务
+            "args":[],      //要传递给program的参数(由于lab3中workload不需要参数，故此项为空)
+            "cwd": "${workspaceFolder}", // 当前工作路径：当前文件所在的工作空间
+            "environment": [{"name": "LD_LIBRARY_PATH", "value": "/home/wd/oslab/malloclab"}] ,
+            "MIMode": "gdb",
+            "setupCommands": [
+                {
+                    "description": "为 gdb 启用整齐打印",
+                    "text": "-enable-pretty-printing",
+                    "ignoreFailures": true
+                }
+            ],
+            "miDebuggerPath": "/usr/bin/gdb"   //gdb位置
+        }
+    ]
+}
