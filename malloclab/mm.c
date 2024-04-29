@@ -88,7 +88,9 @@ void mm_check(const char *);
 size_t user_malloc_size = 0;
 size_t heap_size = 0;
 double get_utilization() {
-    return 0; 
+    double utilization;
+    utilization = (double)user_malloc_size / (double)heap_size;//用户的/总的
+    return utilization; 
 }
 /* 
  * mm_init - initialize the malloc package.
@@ -109,6 +111,7 @@ int mm_init(void)
     if (extend_heap(CHUNKSIZE / WSIZE) == NULL)
         return -1;
     /* mm_check(__FUNCTION__);*/
+    heap_size += 4 * WSIZE + CHUNKSIZE;//heapsize changes 
     return 0;
 }
 
@@ -151,7 +154,7 @@ void *mm_malloc(size_t size)
         return NULL;
     }
     place(bp, newsize);
-
+    heap_size += extend_size;//heap++
     return bp;
 }
 
@@ -176,6 +179,7 @@ void mm_free(void *bp)
     /* add_to_free_list(bp);*/
 
     coalesce(bp);
+    user_malloc_size -= size - WSIZE;//当分配时，用户存储也是增加size-WSIZE（头）
 }
 
 /*
@@ -233,19 +237,28 @@ static void *coalesce(void *bp)
     */
     if (prev_alloc && next_alloc) /* 前后都是已分配的块 */
     {
-       
+       add_to_free_list(bp);//bp开始就不在空闲链表中，不需要先删除
     }
     else if (prev_alloc && !next_alloc) /*前块已分配，后块空闲*/
     {
-        
+        delete_from_free_list(NEXT_BLKP(bp));
+        PUT(HDRP(bp), PACK(GET_SIZE(HDRP(bp)) + GET_SIZE(HDRP(NEXT_BLKP(bp))), 1, 0));//1代表前块分配情况
+        PUT(FTRP(bp), PACK(GET_SIZE(HDRP(bp)), 1, 0));//脚也写上
+        add_to_free_list(bp);
     }
     else if (!prev_alloc && next_alloc) /*前块空闲，后块已分配*/
     {
-        
+        bp = PREV_BLKP(bp);
+        PUT(HDRP(bp), PACK(GET_SIZE(HDRP(bp)) + GET_SIZE(HDRP(NEXT_BLKP(bp))), 1, 0));
+        PUT(FTRP(bp), PACK(GET_SIZE(HDRP(bp)), 1, 0));
     }
     else /*前后都是空闲块*/
     {
-        
+        delete_from_free_list(NEXT_BLKP(bp));
+        size_t next_size = GET_SIZE(HDRP(NEXT_BLKP(bp)));
+        bp = PREV_BLKP(bp);
+        PUT(HDRP(bp), PACK(GET_SIZE(HDRP(bp)) + GET_SIZE(HDRP(NEXT_BLKP(bp))) + next_size, 1, 0));
+        PUT(FTRP(bp), PACK(GET_SIZE(HDRP(bp)), 1, 0));
     }
     return bp;
 }
@@ -253,6 +266,15 @@ static void *coalesce(void *bp)
 #if FIRST_FIT
 static void *find_fit_first(size_t asize)
 {
+    char *bp = free_listp;
+    while (bp != NULL)
+    {
+        if (asize <= GET_SIZE(HDRP(bp)))
+        {
+            return bp;
+        }
+        bp = (char *)GET_SUCC(bp);
+    }
     /* 
         首次匹配算法
         TODO:
@@ -260,11 +282,28 @@ static void *find_fit_first(size_t asize)
         
         HINT: asize 已经计算了块头部的大小
     */
-   return NULL; // 换成实际返回值
+   return NULL; // 找不到就说没有
 }
 
 #else
 static void* find_fit_best(size_t asize) {
+    char *bp = free_listp;
+    char *best_bp = NULL;
+    while (bp != NULL)
+    {
+        if (asize <= GET_SIZE(HDRP(bp)))
+        {
+            if (best_bp == NULL)
+            {
+                best_bp = bp;
+            }
+            else if (GET_SIZE(HDRP(bp)) < GET_SIZE(HDRP(best_bp)))
+            {
+                best_bp = bp;
+            }
+        }
+        bp = (char *)GET_SUCC(bp);
+    }
     /* 
         最佳配算法
         TODO:
@@ -273,7 +312,7 @@ static void* find_fit_best(size_t asize) {
         HINT: asize 已经计算了块头部的大小
     */
     
-    return NULL; // 换成实际返回值
+    return best_bp; // 找不到返回NULL
 }
 #endif
 
@@ -289,7 +328,26 @@ static void place(void *bp, size_t asize)
             2. 若剩余空间仍可作为一个空闲块，则原空闲块被分割为一个已分配块+一个新的空闲块
             3. 空闲块的最小大小已经 #define，或者根据自己的理解计算该值
     */
-    
+    delete_from_free_list(bp);
+    size_t csize = GET_SIZE(HDRP(bp));
+    //size_t prev_alloc = GET_PREV_ALLOC(HDRP(bp));
+    delete_from_free_list(bp);
+    if (csize < asize + MIN_BLK_SIZE)
+    {
+        PUT(HDRP(bp), PACK(csize, 1, 1));
+        user_malloc_size += csize - WSIZE;
+        bp = NEXT_BLKP(bp);
+        PUT(HDRP(bp), PACK(GET_SIZE(HDRP(bp)), 1, 1));
+    }
+    else
+    {
+        PUT(HDRP(bp), PACK(asize, 1, 1));//分配后的块没脚
+        bp = NEXT_BLKP(bp);
+        PUT(HDRP(bp), PACK(csize - asize, 1, 0));
+        PUT(FTRP(bp), PACK(csize - asize, 1, 0));
+        user_malloc_size += asize - WSIZE;
+        add_to_free_list(bp);
+    }
 
     
 }
