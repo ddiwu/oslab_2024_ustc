@@ -6,6 +6,7 @@
 #include <sys/timeb.h>
 
 #include "fat16.h"
+#include <fuse3/fuse.h>
 #include "fat16_utils.h"
 
 /* FAT16 volume data with a file handler of the FAT16 image file */
@@ -51,7 +52,7 @@ cluster_t sector_cluster(sector_t sec) {
     return clus;
 }
 
-cluster_t read_fat_entry(cluster_t clus)
+cluster_t read_fat_entry(cluster_t clus)//也就是找下一簇在哪
 {
     char sector_buffer[MAX_LOGICAL_SECTOR_SIZE];
     /**
@@ -60,13 +61,13 @@ cluster_t read_fat_entry(cluster_t clus)
      *       表项在哪个扇区？在扇区中的偏移量是多少？表项的大小是多少？
      */
     // ================== Your code here =================
-    sector_t sec = meta.fat_sec + clus*2/meta.sector_size;//簇=FAT表项数,每项有2个Byte大小
+    sector_t sec = meta.fat_sec + clus*2/meta.sector_size;//簇号=FAT表项数,每项有2个Byte大小
     size_t off = (clus*2) % meta.sector_size;
     sector_read(sec, sector_buffer);
-    cluster_t value;
-    memcpy(&value, sector_buffer + off, 2);//2个Byte大小
+    cluster_t next_clus;
+    memcpy(&next_clus, sector_buffer + off, 2);//2个Byte大小
     // ===================================================
-    return value; // TODO: 记得删除或者修改这一行
+    return next_clus; // TODO: 记得删除或者修改这一行
 }
 
 typedef struct {
@@ -98,9 +99,24 @@ int find_entry_in_sectors(const char* name, size_t len,
      *       注意：找到entry时返回 FIND_EXIST，找到空槽返回 FIND_EMPTY，所有扇区都满了返回 FIND_FULL。
      */
     // ================== Your code here =================
-    
-    
-    
+    for (int i=0; i<sectors_count; i++){
+        int read_succ = sector_read(from_sector+i, buffer);
+        for (int j=0; j<meta.sector_size; j+=32){//一个目录项32字节
+            DIR_ENTRY* entry = (DIR_ENTRY*)(buffer+j);
+            if (de_is_valid(entry) && check_name(name, len, entry)){
+                slot->dir = *entry;
+                slot->sector = from_sector+i;
+                slot->offset = j;
+                return FIND_EXIST;
+            }
+            if (de_is_free(entry)){
+                slot->dir = *entry;
+                slot->sector = from_sector+i;
+                slot->offset = j;
+                return FIND_EMPTY;
+            }
+        }
+    }
     // ===================================================
     return FIND_FULL;
 }
@@ -122,7 +138,7 @@ int find_entry_internal(const char* path, DirEntrySlot* slot, const char** remai
     sector_t first_sec = meta.root_sec;
     size_t nsec = meta.root_sectors;
     size_t len = strcspn(*remains, "/"); // 目前要搜索的文件名长度
-    int state = find_entry_in_sectors(*remains, len, first_sec, nsec, slot);    // 请补全 find_entry_in_sectors 函数
+    int state = find_entry_in_sectors(*remains, len, first_sec, nsec, slot);
 
     // 找到下一层名字开头
     const char* next_level = *remains + len;
@@ -148,9 +164,16 @@ int find_entry_internal(const char* path, DirEntrySlot* slot, const char** remai
          * Hint: 补全以下代码，实现对非根目录的路径的查找。提示，你要写一个 while 循环，依次搜索当前目录对应的簇里的目录项。
          */
         // ================== Your code here =================
-        
-        
-        
+        while (is_cluster_inuse(clus)){
+            state = find_entry_in_sectors(*remains, len, cluster_first_sector(clus), meta.sec_per_clus, slot);
+            if (state == FIND_EXIST || state == FIND_EMPTY){
+                break;
+            }
+            else if (state < 0){
+                return state;
+            }
+            clus = read_fat_entry(clus);
+        }
         // ===================================================
 
         // 此时，slot 中存放了下一层的目录项
@@ -219,6 +242,7 @@ int find_empty_slot(const char* path, DirEntrySlot *slot, const char** last_name
 mode_t get_mode_from_attr(uint8_t attr) {
     mode_t mode = 0;
     mode |= attr_is_readonly(attr) ? S_IRUGO : S_NORMAL;
+
     mode |= attr_is_directory(attr) ? S_IFDIR : S_IFREG;
     return mode;
 }
@@ -349,15 +373,15 @@ int fill_entries_in_sectors(sector_t first_sec, size_t nsec, fuse_fill_dir_t fil
          *       为降低难度，我们实现了大部分代码，你只需要修改和补全以下带 TODO 的几行。
          */
 
-        sector_t sec = _placeholder_(); // TODO: 请填写正确的扇区号
+        sector_t sec = first_sec + i; // TODO: 请填写正确的扇区号
         int ret = sector_read(sec, sector_buffer);
         if(ret < 0) {
             return -EIO;
         }
-        for(size_t off = 0; off < _placeholder_(); off += _placeholder_() ) { // TODO: 请补全循环条件（每个扇区多大？目录项多大？）
+        for(size_t off = 0; off < meta.sector_size; off += DIR_ENTRY_SIZE) { // TODO: 请补全循环条件（每个扇区多大？目录项多大？）
             DIR_ENTRY* entry = (DIR_ENTRY*)(sector_buffer + off);
             if(de_is_valid(entry)) {
-                int ret = _placeholder_(); // TODO: 请调用 to_longname 函数，将 entry->DIR_Name 转换为长文件名，结果存放在 name 中。
+                int ret = to_longname(entry->DIR_Name, name, MAX_NAME_LEN); // TODO: 请调用 to_longname 函数，将 entry->DIR_Name 转换为长文件名，结果存放在 name 中。
                 if(ret < 0) {
                     return ret;
                 }
@@ -392,8 +416,8 @@ int fat16_readdir(const char *path, void *buf, fuse_fill_dir_t filler, off_t off
          * Hint: 请正确修改以下两行，删掉 _placeholder_() 并替换为正确的数值。提示，使用 meta 中的成员变量。
          *       （注：_placeholder_() 在之后的 TODO 中也会出现。它只是个占位符，相当于你要填的空，你应该删除它，修改成正确的值。）
          */
-        sector_t first_sec = _placeholder_(); // TODO: 请填写正确的根目录区域开始扇区号，你可以参考 meta 的定义。
-        size_t nsec = _placeholder_(); // TODO: 请填写正确的根目录区域扇区数
+        sector_t first_sec =meta.root_sec; // TODO: 请填写正确的根目录区域开始扇区号，你可以参考 meta 的定义。
+        size_t nsec = meta.root_sectors; // TODO: 请填写正确的根目录区域扇区数
         fill_entries_in_sectors(first_sec, nsec, filler, buf);
         return 0;
     }
@@ -447,8 +471,8 @@ int read_from_cluster_at_offset(cluster_t clus, off_t offset, char* data, size_t
      *       3. 将扇区正确位置的内容移动至 data 中正确位置
      *       你只需要补全以下 TODO 部分。主要是计算扇区号和扇区内偏移量；以及使用 memcpy 将数据移动到 data 中。
      */
-    uint32_t sec = _placeholder_(); // TODO: 请填写正确的扇区号。
-    size_t sec_off = _placeholder_(); // TODO: 请填写正确的扇区内偏移量。
+    uint32_t sec = cluster_first_sector(clus) + offset/meta.sector_size; // TODO: 请填写正确的扇区号。
+    size_t sec_off = offset%meta.sector_size; // TODO: 请填写正确的扇区内偏移量。
     size_t pos = 0; // 实际已经读取的字节数
     while(pos < size) { // 还没有读取完毕
         int ret = sector_read(sec, sector_buffer);
@@ -457,9 +481,9 @@ int read_from_cluster_at_offset(cluster_t clus, off_t offset, char* data, size_t
         }
         // Hint: 使用 memcpy 挪数据，从 sec_off 开始挪。挪到 data 中哪个位置？挪多少？挪完后记得更新 pos （约3行代码）
         // ================== Your code here =================
-        
-        
-        
+        size_t read_size = min(size - pos, meta.sector_size - sec_off);
+        memcpy(data + pos, sector_buffer + sec_off, read_size);
+        pos += read_size;
         // ===================================================
         sec_off = 0;
         sec ++ ;
