@@ -37,7 +37,7 @@ typedef struct {
 
 FAT16 meta;
 
-sector_t cluster_first_sector(cluster_t clus) {
+sector_t cluster_first_sector(cluster_t clus) {//簇的扇区位置
     assert(is_cluster_inuse(clus));
     return ((clus - 2) * meta.sec_per_clus) + meta.data_sec;
 }
@@ -60,11 +60,13 @@ cluster_t read_fat_entry(cluster_t clus)
      *       表项在哪个扇区？在扇区中的偏移量是多少？表项的大小是多少？
      */
     // ================== Your code here =================
-    
-    
-    
+    sector_t sec = meta.fat_sec + clus*2/meta.sector_size;//簇=FAT表项数,每项有2个Byte大小
+    size_t off = (clus*2) % meta.sector_size;
+    sector_read(sec, sector_buffer);
+    cluster_t value;
+    memcpy(&value, sector_buffer + off, 2);//2个Byte大小
     // ===================================================
-    return CLUSTER_END; // TODO: 记得删除或者修改这一行
+    return value; // TODO: 记得删除或者修改这一行
 }
 
 typedef struct {
