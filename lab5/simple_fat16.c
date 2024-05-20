@@ -6,7 +6,6 @@
 #include <sys/timeb.h>
 
 #include "fat16.h"
-#include <fuse3/fuse.h>
 #include "fat16_utils.h"
 
 /* FAT16 volume data with a file handler of the FAT16 image file */
@@ -732,11 +731,22 @@ int alloc_one_cluster(cluster_t* clus) {
      */
 
     // ================== Your code here =================
-    
-    
-    
+    for (cluster_t cluster = CLUSTER_MIN; cluster <= CLUSTER_MAX; cluster++){
+        if (read_fat_entry(cluster) == CLUSTER_FREE){//不能用is_cluster_inuse，因为这个函数判断了文件结束的情况
+            *clus = cluster;
+            int ret = write_fat_entry(cluster, CLUSTER_END);
+            if (ret < 0){
+                return ret;
+            }
+            ret = cluster_clear(cluster);
+            if (ret < 0){
+                return ret;
+            }
+            return 0;
+        }
+    }
     // ===================================================
-    return -ENOTSUP;    // TODO 请删除这一行或者修改为正确的返回值
+    return -ENOSPC;    // TODO 请删除这一行或者修改为正确的返回值
 }
 
 /**
@@ -766,9 +776,33 @@ int alloc_clusters(size_t n, cluster_t* first_clus) {
 
 
     // ================== Your code here =================
-    
-    
-    
+    for (cluster_t cluster = CLUSTER_MIN; cluster <= CLUSTER_MAX; cluster++){
+        if (read_fat_entry(cluster) == CLUSTER_FREE){
+            clusters[allocated] = cluster;
+            allocated++;
+            if (allocated == n){
+                break;
+            }
+        }
+    }
+    if (allocated < n){
+        free(clusters);
+        return -ENOSPC;
+    }
+    clusters[n] = CLUSTER_END;
+    for (size_t i = 0; i < n; i++){
+        int ret = write_fat_entry(clusters[i], clusters[i + 1]);
+        if (ret < 0){
+            free(clusters);
+            return ret;
+        }
+        ret = cluster_clear(clusters[i]);
+        if (ret < 0){
+            free(clusters);
+            return ret;
+        }
+    }
+    *first_clus = clusters[0];
     // ===================================================
 
     free(clusters);
@@ -797,9 +831,23 @@ int fat16_mkdir(const char *path, mode_t mode) {
      */
 
     // ================== Your code here =================
-    
-    
-    
+    ret = find_empty_slot(path, &slot, &filename);
+    if (ret < 0){
+        return ret;
+    }
+    ret = alloc_one_cluster(&dir_clus);
+    if (ret < 0){
+        return ret;
+    }
+    char shortname[11];
+    ret = to_shortname(filename, MAX_NAME_LEN, shortname);
+    if (ret < 0){
+        return ret;
+    }
+    ret = dir_entry_create(slot, shortname, ATTR_DIRECTORY, dir_clus, 0);
+    if (ret < 0){
+        return ret;
+    }
     // ===================================================
 
     // 设置 . 和 .. 目录项
@@ -838,11 +886,24 @@ int fat16_unlink(const char *path) {
      *       记得检查调用函数后的返回值。
      */
     // ================== Your code here =================
-    
-    
-    
+    int ret = find_entry(path, &slot);
+    if (ret < 0){
+        return ret;
+    }
+    if (attr_is_directory(dir->DIR_Attr)){
+        return -EISDIR;
+    }
+    ret = free_clusters(dir->DIR_FstClusLO);
+    if (ret < 0){
+        return ret;
+    }
+    dir->DIR_Name[0] = NAME_DELETED;//in de_is_deleted函数中
+    ret = dir_entry_write(slot);
+    if (ret < 0){
+        return ret;
+    }
     // ===================================================
-    return -ENOTSUP; // TODO: 请修改返回值
+    return 0; // TODO: 请修改返回值
 }
 
 /**
@@ -865,11 +926,48 @@ int fat16_rmdir(const char *path) {
      */
 
     // ================== Your code here =================
-    
-    
-    
+    DirEntrySlot slot;
+    DIR_ENTRY* dir = &(slot.dir);
+    char sector_buffer[MAX_LOGICAL_SECTOR_SIZE];
+    int ret = find_entry(path, &slot);
+    if (ret < 0){
+        return ret;
+    }
+    if (!attr_is_directory(dir->DIR_Attr)){
+        return -ENOTDIR;
+    }
+    cluster_t clus = dir->DIR_FstClusLO;
+    while (is_cluster_inuse(clus)){
+        sector_t first_sec = cluster_first_sector(clus);
+        for (int i = 0; i < meta.sec_per_clus; i++){
+            sector_t sec = first_sec + i;
+            ret = sector_read(sec, sector_buffer);
+            if (ret < 0){
+                return ret;
+            }
+            for (size_t j = 0; j < meta.sector_size; j += DIR_ENTRY_SIZE){
+                DIR_ENTRY* entry = (DIR_ENTRY*)(sector_buffer + j);
+                if (de_is_valid(entry) && !de_is_dot(entry)){
+                    return -ENOTEMPTY;
+                } 
+                else if (de_is_free(entry)) {
+                    break;
+                }
+            }
+        }
+        clus = read_fat_entry(clus);
+    }
+    ret = free_clusters(dir->DIR_FstClusLO);//clus has changed!!!
+    if (ret < 0){
+        return ret;
+    }
+    dir->DIR_Name[0] = NAME_DELETED;
+    ret = dir_entry_write(slot);
+    if (ret < 0){
+        return ret;
+    }
     // ===================================================
-    return -ENOTSUP; // TODO: 请修改返回值
+    return 0; // TODO: 请修改返回值
 }
 
 /**
@@ -919,11 +1017,26 @@ ssize_t write_to_cluster_at_offset(cluster_t clus, off_t offset, const char* dat
      */
 
     // ================== Your code here =================
-    
-    
-    
+    uint32_t sec = cluster_first_sector(clus) + offset/meta.sector_size;
+    size_t sec_off = offset%meta.sector_size;
+    size_t pos = 0;
+    while (pos < size){
+        int ret = sector_read(sec, sector_buffer);
+        if (ret < 0){
+            return ret;
+        }      
+        size_t write_size = min(size - pos, meta.sector_size - sec_off);
+        memcpy(sector_buffer + sec_off, data + pos, write_size);
+        ret = sector_write(sec, sector_buffer);
+        if (ret < 0){
+            return ret;
+        }
+        pos += write_size;
+        sec_off = 0;
+        sec++;
+    }
     // ===================================================
-    return -ENOTSUP; // TODO: 请修改返回值
+    return pos; // TODO: 请修改返回值
 }
 
 /**
@@ -966,11 +1079,53 @@ int fat16_write(const char *path, const char *data, size_t size, off_t offset,
      * 
      */
     // ================== Your code here =================
-    
-    
-    
+    size_t clus_cnt = 0;//!!!
+    cluster_t fst_clus, last_clus = CLUSTER_FREE;//不设0因为初始化时就是0
+    cluster_t cluster = dir->DIR_FstClusLO;
+    if (size + offset > dir->DIR_FileSize) {
+        dir->DIR_FileSize = size + offset;
+    }
+    while (is_cluster_inuse(cluster)) {
+        clus_cnt++;
+        last_clus = cluster;
+        cluster = read_fat_entry(cluster);
+    }
+    printf("clus_cnt: %ld\n", clus_cnt);
+    if (size + offset > clus_cnt * meta.cluster_size) {
+        cluster_t need_cnt = (size + offset + meta.cluster_size - 1) / meta.cluster_size - clus_cnt;
+        printf("need_cnt: %d\n", need_cnt);
+        int ret = alloc_clusters(need_cnt, &fst_clus);
+        if (ret < 0)
+            return ret;
+        if (last_clus == CLUSTER_FREE) {
+            dir->DIR_FstClusLO = fst_clus;
+            printf("fst_clus: %d\n", fst_clus);
+        } else {
+            write_fat_entry(last_clus, fst_clus);
+        }
+    }
+    cluster_t clus = dir->DIR_FstClusLO;
+    size_t p = 0;
+    while (offset >= meta.cluster_size){
+        offset -= meta.cluster_size;
+        clus = read_fat_entry(clus);
+    }
+    while (p < size){
+        size_t write_data = min(size - p, meta.cluster_size - offset);
+        ret = write_to_cluster_at_offset(clus, offset, data + p, write_data);
+        if (ret < 0){
+            return ret;
+        }
+        p += ret;
+        offset = 0;
+        clus = read_fat_entry(clus);
+    }
+    ret = dir_entry_write(slot);
+    if (ret < 0){
+        return ret;
+    }
     // ===================================================
-    return -ENOTSUP; // TODO: 请修改返回值
+    return size; // TODO: 请修改返回值
 }
 
 /**
