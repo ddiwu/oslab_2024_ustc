@@ -555,9 +555,16 @@ int fat16_read(const char *path, char *buffer, size_t size, off_t offset,
      *          clus 则需要读取 FAT 表，别忘了你已经实现了 read_fat_entry 函数。
      */
     // ================== Your code here =================
-    
-    
-    
+    while (p < size){
+        size_t read_data = min(size - p, meta.cluster_size - offset);
+        ret = read_from_cluster_at_offset(clus, offset, buffer + p, read_data);
+        if (ret < 0){
+            return ret;
+        }
+        p += read_data;
+        offset = 0;
+        clus = read_fat_entry(clus);
+    }
     // ===================================================
     return p;
 }
@@ -572,12 +579,12 @@ int dir_entry_write(DirEntrySlot slot) {
      */
 
     char sector_buffer[MAX_LOGICAL_SECTOR_SIZE];
-    int ret = _placeholder_(); // TODO: 使用 sector_read 读取扇区
+    int ret = sector_read(slot.sector, sector_buffer); // TODO: 使用 sector_read 读取扇区
     if(ret < 0) {
         return ret;
     }
-    _placeholder_(); // TODO: 使用 memcpy 将 slot.dir 里的目录项写入 buffer 中的正确位置
-    ret = _placeholder_(); // TODO: 使用 sector_write 写回扇区
+    memcpy(sector_buffer+slot.offset, &(slot.dir), DIR_ENTRY_SIZE); // TODO: 使用 memcpy 将 slot.dir 里的目录项写入 buffer 中的正确位置
+    ret = sector_write(slot.sector, sector_buffer); // TODO: 使用 sector_write 写回扇区
     if(ret < 0) {
         return ret;
     }
@@ -597,9 +604,11 @@ int dir_entry_create(DirEntrySlot slot, const char *shortname,
      */
 
     // ================== Your code here =================
-    
-    
-    
+    memcpy(dir->DIR_Name, shortname, 11);//8+3
+    dir->DIR_Attr = attr;
+    dir->DIR_FstClusHI = 0;
+    dir->DIR_FstClusLO = first_clus;
+    dir->DIR_FileSize = file_size;
     // ===================================================
     
     // 设置文件时间戳，无需修改
@@ -658,9 +667,10 @@ int fat16_mknod(const char *path, mode_t mode, dev_t dev) {
  */
 int write_fat_entry(cluster_t clus, cluster_t data) {
     char sector_buffer[MAX_LOGICAL_SECTOR_SIZE];
-    size_t clus_off = clus * sizeof(cluster_t);
+    size_t clus_off = clus * sizeof(cluster_t);//fat表项的位置
     sector_t clus_sec = clus_off / meta.sector_size;
     size_t sec_off = clus_off % meta.sector_size;
+    size_t sec_num = meta.fat_sec + clus_sec;
     for(size_t i = 0; i < meta.fats; i++) {
         /**
          * TODO: 6.2 修改FAT表项 [约10行代码，核心代码约4行]
@@ -670,9 +680,10 @@ int write_fat_entry(cluster_t clus, cluster_t data) {
          *         3. 将该扇区写回
          */
         // ================== Your code here =================
-        
-        
-        
+        sector_read(sec_num, sector_buffer);
+        memcpy(sector_buffer + sec_off, &data, sizeof(cluster_t));
+        sector_write(sec_num, sector_buffer);
+        sec_num += meta.sec_per_fat;//总共有多个fat表，这样直接跳过一个表
         // ===================================================
     }
     return 0;
